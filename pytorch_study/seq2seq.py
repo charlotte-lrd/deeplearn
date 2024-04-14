@@ -74,3 +74,101 @@ def sequence_mask(X, valid_len, value=0):
     return X
 
 X = torch.tensor([[1, 2, 3], [4, 5, 6]])
+ 
+
+#可以在seq2seq中加入注意力机制
+# encoder: rnn last layer of hidden 同时作为 key和value
+# decoder：前一个时刻的output为query 注意力输出与X合并 作为该时刻的输入
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+
+class Encoder(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(Encoder, self).__init__()
+        self.hidden_size = hidden_size
+        self.embedding = nn.Embedding(input_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size)
+
+    def forward(self, input, hidden):
+        embedded = self.embedding(input).view(1, 1, -1)
+        output = embedded
+        output, hidden = self.gru(output, hidden)
+        return output, hidden
+
+    def init_hidden(self):
+        return torch.zeros(1, 1, self.hidden_size)
+
+class Attention(nn.Module):
+    def __init__(self, hidden_size):
+        super(Attention, self).__init__()
+        self.hidden_size = hidden_size
+        self.attn = nn.Linear(hidden_size * 2, hidden_size)
+        self.v = nn.Parameter(torch.rand(hidden_size))
+
+    def forward(self, hidden, encoder_outputs):
+        seq_len = encoder_outputs.size(0)
+        attn_energies = torch.zeros(seq_len)
+        for i in range(seq_len):
+            attn_energies[i] = self.score(hidden, encoder_outputs[i])
+        return F.softmax(attn_energies, dim=0).unsqueeze(0).unsqueeze(0)
+
+    def score(self, hidden, encoder_output):
+        energy = self.attn(torch.cat((hidden[0], encoder_output), 1))
+        energy = torch.matmul(energy, self.v)
+        return energy
+
+class Decoder(nn.Module):
+    def __init__(self, hidden_size, output_size):
+        super(Decoder, self).__init__()
+        self.hidden_size = hidden_size
+        self.embedding = nn.Embedding(output_size, hidden_size)
+        self.gru = nn.GRU(hidden_size * 2, hidden_size)
+        self.out = nn.Linear(hidden_size * 2, output_size)
+        self.attention = Attention(hidden_size)
+
+    def forward(self, input, hidden, encoder_outputs):
+        embedded = self.embedding(input).view(1, 1, -1)
+        attn_weights = self.attention(hidden, encoder_outputs)
+        context = torch.bmm(attn_weights, encoder_outputs.unsqueeze(0))
+        combined = torch.cat((embedded, context), 2)
+        output, hidden = self.gru(combined, hidden)
+        output = F.log_softmax(self.out(torch.cat((output[0], context[0]), 1)), dim=1)
+        return output, hidden, attn_weights
+
+def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, max_length=10):
+    encoder_hidden = encoder.init_hidden()
+
+    encoder_optimizer.zero_grad()
+    decoder_optimizer.zero_grad()
+
+    input_length = input_tensor.size(0)
+    target_length = target_tensor.size(0)
+
+    encoder_outputs = torch.zeros(max_length, encoder.hidden_size)
+
+    loss = 0
+
+    for ei in range(input_length):
+        encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+        encoder_outputs[ei] = encoder_output[0, 0]
+
+    decoder_input = torch.tensor([[SOS_token]])
+
+    decoder_hidden = encoder_hidden
+
+    for di in range(target_length):
+        decoder_output, decoder_hidden, decoder_attention = decoder(
+            decoder_input, decoder_hidden, encoder_outputs)
+        loss += criterion(decoder_output, target_tensor[di])
+        decoder_input = target_tensor[di]
+
+    loss.backward()
+
+    encoder_optimizer.step()
+    decoder_optimizer.step()
+
+    return loss.item() / target_length
+
+
