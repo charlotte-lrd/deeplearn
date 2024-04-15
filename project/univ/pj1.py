@@ -65,24 +65,28 @@ def transform(X,y,scale_factor=1.0,if_rotate=False,if_translate=False,p=0.2):
                 Xnew = translate(X[i,:,:], tx, ty)
                 X = np.concatenate((X, np.expand_dims(Xnew, axis=0)), axis=0)
                 y = np.concatenate((y, np.expand_dims(y[i], axis=0)), axis=0)
-    return X.reshape(X.shape[0],-1),y
+    return X,y
 
 X,y,Xtest,ytest,Xval,yval = mat['X'], one_hot(mat['y']), mat['Xtest'], one_hot(mat['ytest']), mat['Xvalid'], one_hot(mat['yvalid'])
 X,y = transform(X,y,if_translate=True,if_rotate=True)
 
 class Model():
-    def __init__(self, num_input, num_hiddens, num_output):
-        self.num_input = num_input
+    def __init__(self, shape_input, num_hiddens, num_output,conv_size=(5,5)):
         self.num_hiddens = num_hiddens # num_hiddens[i]: num of perceptrons in hidden layer[i]
         self.num_output = num_output
         
-        # initialize weight;bias
+        # initialize weight;bias;filter
         self.weights = []
         self.bias = []
-        nums = [num_input] + num_hiddens + [num_output]
+        wide = shape_input[0] - conv_size[0]+1
+        height = shape_input[1] - conv_size[1]+1
+        input_mlp = wide*height
+        nums = [input_mlp] + num_hiddens + [num_output]
         for i in range(len(nums) - 1):
             self.weights.append(np.random.randn(nums[i], nums[i+1]))
             self.bias.append(np.random.randn(1,nums[i+1]))
+
+        self.filter = np.random.randn(conv_size[0], conv_size[1])
 
         # initialize weight1,2, bias1,2
         self.weights2 = None
@@ -90,10 +94,24 @@ class Model():
         self.weights1 = self.weights
         self.bias1 =self.bias
         self.norm2 = None
-    
+        self.filter2 = None
+        self.filter1 = None
+
     def activate(self, x):
         return np.tanh(x)
     
+    def conv2d(self, X, filter):
+        batch_size,height, width = X.shape
+        filter_height, filter_width = filter.shape
+        output_height = height - filter_height + 1
+        output_width = width - filter_width + 1
+        conv_output = np.zeros((batch_size,output_height, output_width))
+        for k in range(batch_size):
+            for i in range(output_height):
+                for j in range(output_width):
+                    conv_output[k,i, j] = np.sum(X[k,i:i+filter_height, j:j+filter_width] * filter)
+        return conv_output
+
     def softmax(self, x):
         exp_x = np.exp(x)
         return exp_x / np.sum(exp_x, axis=1, keepdims=True)
@@ -104,6 +122,12 @@ class Model():
     def predict(self, X, forward=False):
         h = X
         hidden_outputs = [h]
+
+        # conv2D
+        h = self.conv2d(X, self.filter)
+        h = h.reshape(X.shape[0],-1)
+        
+        # MLP
         num_weights = len(self.weights)
         for i in range(num_weights-1):
             h = self.activate(np.dot(h, self.weights[i])+self.bias[i])
@@ -184,9 +208,10 @@ class Model():
 
 
 num_hiddens = [64,16]
-mlp = Model(X.shape[1],num_hiddens,10)
-mlp.fit(X,y,Xval,yval,lr=0.7,epochs=2000,beta=0.5, dropout=0.2, c=0.03, if_earlystop=True)
-ypred1 = mlp.predict(Xtest).argmax(axis=1)
-ypred2 = mlp.predict(X).argmax(axis=1)
-print(classification_report(ypred2,y.argmax(axis=1)))
-print(classification_report(ypred1,ytest.argmax(axis=1)))
+mlp = Model((16,16),num_hiddens,10)
+# mlp.fit(X,y,Xval,yval,lr=0.7,epochs=2000,beta=0.5, dropout=0.2, c=0.03, if_earlystop=True)
+# ypred1 = mlp.predict(Xtest).argmax(axis=1)
+# ypred2 = mlp.predict(X).argmax(axis=1)
+# print(classification_report(ypred2,y.argmax(axis=1)))
+# print(classification_report(ypred1,ytest.argmax(axis=1)))
+print(mlp.predict(X).shape)
